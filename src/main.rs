@@ -31,13 +31,15 @@ impl Sysgenid {
         }
     }
 
-    pub fn bump_generation(&mut self, ctx: &mut Context, min_gen: u32) {
+    pub fn bump_generation<F>(&mut self, min_gen: u32, signal_fn: F)
+    where
+        F: FnOnce(&str, u32),
+    {
         // Update generation counter.
         self.generation_counter = max(min_gen, self.generation_counter + 1);
         // TODO: update mapped value here
         // Signal watchers new generation event.
-        let signal_msg = ctx.make_signal("NewGeneration", (self.generation_counter,));
-        ctx.push_msg(signal_msg);
+        signal_fn("NewGeneration", self.generation_counter);
         // Mark all tracked watchers as outdated.
         self.outdated_watchers
             .extend(std::mem::take(&mut self.watchers));
@@ -206,7 +208,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             (),
             |ctx: &mut Context, data: &mut LSysgenid, (min_gen,): (u32,)| {
                 let mut sysgenid = data.lock().unwrap();
-                sysgenid.bump_generation(ctx, min_gen);
+                sysgenid.bump_generation(min_gen, |name, counter| {
+                    let signal_msg = ctx.make_signal(name, (counter,));
+                    ctx.push_msg(signal_msg);
+                });
                 Ok(())
             },
         );
