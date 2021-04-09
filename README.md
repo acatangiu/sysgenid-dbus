@@ -62,23 +62,28 @@ section below.
 
 #### Terminology
  - `watcher` - a client using the SysGenID service _watching_ for system generation changes.
- - `tracked watcher` - a client that is tracked by the service and considered `up-to-date`
-   only after confirming back to the service the correct _system generation counter_.
- - `untracked watcher` - default state for all clients. Tracking is opt-in and explicit.
-   All untracked watchers are inherently considered `up-to-date`.
+ - `untracked watcher` - default state for all clients. For a client to be tracked it has
+   to explicitly opt-in by confirming back to the service the correct _system generation
+   counter_.
+ - `tracked watcher` - a client that is tracked by the service. Such a watcher is considered
+   `up-to-date` only after confirming back to the service the correct
+   _system generation counter_.
+   Once tracked, a client is only _untracked_ when closing its connection to the DBus bus.
  - `outdated watcher` - a _tracked_ client that whose tracking has lived through a system
    generation change, but has not (yet) confirmed back to the service the correct _system
    generation counter_.
 
 **Methods:**
 - `GetSysGenCounter` - returns latest system generation counter.
-- `UpdateWatcher` - sets whether client/watcher should be tracked for ACKs or not, is also
-  used by the watcher to confirm/ack the correct _sys gen counter_ to the service so it
-  can be marked as an `up-to-date tracked watcher`.
+- `AckWatcherCounter` - marks the client/watcher to be tracked for ACKs, is also
+  used by the watcher to confirm/ack the correct _sys gen counter_ to the service after
+  every generation change so the service keeps correct track of it as `outdated` or
+  `up-to-date`.
   Will error if client/watcher confirms/acks the wrong _sys gen counter_.
-- `CountOutdatedWatchers` - returns the number of current _outdated tracked watchers_.
-  A value of `zero` can be interpreted as the system having adjusted after a generation
-  change.
+- `CountOutdatedWatchers` - returns the number of current number of
+  _outdated tracked watchers_.
+  A value of `zero` can be interpreted as the system being fully re-adjusted after a
+  generation change.
 - `TriggerSysGenUpdate` - triggers a generation update (should be a privileged operation).
 
 **Signals:**
@@ -105,14 +110,17 @@ In such cases, logic can be added in-line with the sensitive code to check the
 counter and trigger on-demand/just-in-time readjustments when changes are
 detected on the memory mapped file.
 
-Users of this interface that plan to lazily adjust should not enable
-watcher tracking if they also use the DBus interface. Tracking or waiting on
-them doesn't make sense.
+Users of this interface that plan to lazily adjust most likely don't need to
+also use the DBus interface, since tracking or waiting on them doesn't make sense.
 
 ### Service interface DBus XML specification
 ```xml
 <node name="/com/RFC/sysgenid">
   <interface name="com.RFC.sysgenid">
+    <method name="AckWatcherCounter">
+      <arg name="watcher_counter" type="u" direction="in"/>
+      <arg name="sysgen_counter" type="u" direction="out"/>
+    </method>
     <method name="CountOutdatedWatchers">
       <arg name="outdated_watchers" type="u" direction="out"/>
     </method>
@@ -122,12 +130,7 @@ them doesn't make sense.
     <method name="TriggerSysGenUpdate">
       <arg name="min_gen" type="u" direction="in"/>
     </method>
-    <method name="UpdateWatcher">
-      <arg name="tracking_enabled" type="b" direction="in"/>
-      <arg name="watcher_counter" type="u" direction="in"/>
-      <arg name="sysgen_counter" type="u" direction="out"/>
-    </method>
-    <signal name="NewGeneration">
+    <signal name="NewSystemGeneration">
       <arg name="sysgen_counter" type="u"/>
     </signal>
     <signal name="SystemReady">
@@ -189,8 +192,7 @@ find out about needing to readjust and at the same time provides a
 mechanism for the overseer entity to wait for everyone to be done, the
 system to have readjusted, so it can un-quiesce.
 
-Example snapshot-safe workflow
-------------------------------
+### Example snapshot-safe workflow
 
 1) Before taking a snapshot, quiesce the VM/container/system. Exactly
    how this is achieved is very workload-specific, but the general
@@ -202,11 +204,11 @@ Example snapshot-safe workflow
    `TriggerSysGenUpdate` method.
 5) Software components which have the DBus `NewGeneration` signal in
    their event loops are notified of the generation change.
-   They do their specific internal adjustments. Some may have requested
-   to be tracked and waited on by the overseer, others might choose to
-   do their adjustments out of band and not block the overseer.
+   They do their specific internal adjustments. Some may have chosen to
+   be tracked and waited on by the overseer, others might choose to do
+   their adjustments out of band and not block the overseer.
    Tracked ones *must* signal when they are done/ready by confirming the
-   new sys gen counter using the `UpdateWatcher` DBus method.
+   new sys gen counter using the `AckWatcherCounter` DBus method.
 6) Overseer will block and wait for all tracked watchers by waiting on
    the `SystemReady` DBus signal. Once all tracked watchers are done
    in step 5, the signal is sent by `sysgenid` service and overseer will
@@ -223,7 +225,8 @@ Example snapshot-safe workflow
    called while system is quiesced. When workload is resumed by the
    overseer, on the first call into these libs, they will safely JIT
    readjust.
-   Users of this lazy on-demand readjustment model should not enable
-   watcher tracking since doing so would introduce a logical deadlock:
+   Users of this lazy on-demand readjustment model should not use the
+   DBus interface or at least not enable watcher tracking since doing so
+   would introduce a logical deadlock:
    lazy adjustments happen only after un-quiesce, but un-quiesce is
    blocked until all tracked watchers are up-to-date.

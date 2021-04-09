@@ -8,8 +8,7 @@ pub trait ComRFCSysgenid {
     fn count_outdated_watchers(&self) -> Result<u32, dbus::Error>;
     fn get_gen_counter(&self) -> Result<u32, dbus::Error>;
     fn trigger_gen_update(&self, min_gen: u32) -> Result<(), dbus::Error>;
-    fn update_watcher(&self, tracking_flag: bool, watcher_counter: u32)
-        -> Result<u32, dbus::Error>;
+    fn ack_watcher_counter(&self, watcher_counter: u32) -> Result<u32, dbus::Error>;
 }
 
 impl<'a, T: blocking::BlockingSender, C: ::std::ops::Deref<Target = T>> ComRFCSysgenid
@@ -29,17 +28,9 @@ impl<'a, T: blocking::BlockingSender, C: ::std::ops::Deref<Target = T>> ComRFCSy
         self.method_call("com.RFC.sysgenid", "TriggerSysGenUpdate", (min_gen,))
     }
 
-    fn update_watcher(
-        &self,
-        tracking_flag: bool,
-        watcher_counter: u32,
-    ) -> Result<u32, dbus::Error> {
-        self.method_call(
-            "com.RFC.sysgenid",
-            "UpdateWatcher",
-            (tracking_flag, watcher_counter),
-        )
-        .and_then(|r: (u32,)| Ok(r.0))
+    fn ack_watcher_counter(&self, watcher_counter: u32) -> Result<u32, dbus::Error> {
+        self.method_call("com.RFC.sysgenid", "AckWatcherCounter", (watcher_counter,))
+            .and_then(|r: (u32,)| Ok(r.0))
     }
 }
 
@@ -138,8 +129,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         // Say hello to the server example, so we get a signal.
         let (counter,): (u32,) =
-            proxy.method_call(SYSGENID_INTERFACE, "UpdateWatcher", (true, counter))?;
-        println!("update self as tracked watcher; gen counter: {}", counter);
+            proxy.method_call(SYSGENID_INTERFACE, "AckWatcherCounter", (counter,))?;
+        println!("ack gen counter: {}", counter);
 
         println!("trigger new generation");
         proxy.method_call(SYSGENID_INTERFACE, "TriggerSysGenUpdate", (0 as u32,))?;
@@ -150,9 +141,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         let (counter,): (u32,) =
             proxy.method_call(SYSGENID_INTERFACE, "CountOutdatedWatchers", ())?;
         println!("outdated watchers (method): {}", counter);
-
-        println!("removing self as tracked watcher");
-        proxy.method_call(SYSGENID_INTERFACE, "UpdateWatcher", (false, counter))?;
     }
 
     // Listen to incoming signals forever.

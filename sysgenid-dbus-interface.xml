@@ -1,5 +1,9 @@
 <node name="/com/RFC/sysgenid">
   <interface name="com.RFC.sysgenid">
+    <method name="AckWatcherCounter">
+      <arg name="watcher_counter" type="u" direction="in"/>
+      <arg name="sysgen_counter" type="u" direction="out"/>
+    </method>
     <method name="CountOutdatedWatchers">
       <arg name="outdated_watchers" type="u" direction="out"/>
     </method>
@@ -8,11 +12,6 @@
     </method>
     <method name="TriggerSysGenUpdate">
       <arg name="min_gen" type="u" direction="in"/>
-    </method>
-    <method name="UpdateWatcher">
-      <arg name="tracking_enabled" type="b" direction="in"/>
-      <arg name="watcher_counter" type="u" direction="in"/>
-      <arg name="sysgen_counter" type="u" direction="out"/>
     </method>
     <signal name="NewSystemGeneration">
       <arg name="sysgen_counter" type="u"/>
