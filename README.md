@@ -230,3 +230,98 @@ system to have readjusted, so it can un-quiesce.
    would introduce a logical deadlock:
    lazy adjustments happen only after un-quiesce, but un-quiesce is
    blocked until all tracked watchers are up-to-date.
+
+## Provided code examples
+
+The repo contains two code examples `examples/client.rs` and
+`examples/overseer.rs` that showcase the SysGenID service capabilities
+and provide a model for using this service.
+
+`client.rs` - shows an _Application_ doing some app-specific periodic work,
+while also listening for SysGenID events. On receipt of a system generation
+change signal, it will adjust to new generation, acknowledge it back to the
+service and continue work.
+
+`overseer.rs` - shows shows a simple _Overseer-type_ application. This simple
+implementation goes through the following steps then exits:
+1. quiesces the system (IRL turn off networking for example - this example
+   only prints a message) before a snapshot happens,
+2. bumps sys gen id after system is loaded from snapshot,
+3. waits for all consumer apps to readjust to the new environment (waits
+   for `SystemReady` signal),
+4. un-quiesce system (IRL rollback step 1 - this example only prints message)
+   bringing it back to active state.
+
+The whole SysGenID dance can be exercised by running the service, running
+one or more instances of `examples/client`, then running `examples/overseer`.
+
+### Example run
+`example_run.sh` code:
+```bash
+#!/bin/bash
+
+# Build service
+cargo +stable build
+# Build examples
+cargo +stable build --examples
+
+# Kill old instances of SysGenID DBus service
+killall sysgenid-dbus
+# Start new instance of SysGenID DBus service
+cargo +stable run &
+
+# Give the service a chance to start
+sleep 1
+
+# Run a client instance in the background
+cargo +stable run --example client &
+CLIENT_PID=$!
+
+# Give it a few seconds of peace and quiet
+# This is it running before snapshot
+sleep 4
+
+# Run the overseer example which would run
+# right after the snapshot. Overseer exits by itself
+cargo +stable run --example overseer
+
+# Give the client a few more seconds of
+# simulated post-snapshot work
+sleep 4
+
+# Kill the client
+kill $CLIENT_PID
+
+# Kill SysGenID DBus service
+killall sysgenid-dbus
+```
+`example_run.sh` output:
+```bash
+sysgenid-dbus$ ./run_examples.sh
+
+Client: example doing some periodic work (uuid 9354901b-1af1-4ef0-b19b-6901cd09d925)
+Client: example doing some periodic work (uuid 9354901b-1af1-4ef0-b19b-6901cd09d925)
+Client: example doing some periodic work (uuid 9354901b-1af1-4ef0-b19b-6901cd09d925)
+Overseer: do quiesce.
+Overseer: trigger new generation (min gen counter 0)!
+Overseer: call 'CountOutdatedWatchers'
+Client: got 'NewGeneration' signal! Marking dirty...
+Overseer: 'CountOutdatedWatchers' method result 1
+Overseer: There are 1 outdated watchers across the system. Waiting for them...
+Client: getting new generation (using DBus method 'GetSysGenCounter')...
+Client: got new gen counter: 1
+Client: adjusting to new environment...
+Client: adjusted to new environment: new UUID: 2c11d75a-a654-44b6-bbaf-c740b9a5b161
+Client: acknowledging adjustment complete (using DBus method 'AckWatcherCounter')...
+Client: acknowledged new counter: 1
+Client: adjusted, continuing workload...
+Client: example doing some periodic work (uuid 2c11d75a-a654-44b6-bbaf-c740b9a5b161)
+Overseer: System is adjusted (got 'SystemReady' DBus signal)!
+Overseer: Overseer do un-quiesce.
+Overseer: System ready!
+Client: example doing some periodic work (uuid 2c11d75a-a654-44b6-bbaf-c740b9a5b161)
+Client: example doing some periodic work (uuid 2c11d75a-a654-44b6-bbaf-c740b9a5b161)
+
+./run_examples.sh: line 36:  1269 Terminated              cargo +stable run
+./run_examples.sh: line 36:  1272 Terminated              cargo +stable run --example client
+```
