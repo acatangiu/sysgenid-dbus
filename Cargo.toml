@@ -7,6 +7,7 @@ edition = "2018"
 [dependencies]
 dbus = ">=0.9.2"
 dbus-crossroads = "0.3.0"
+log = "0.4"
 
 # Used by examples
 dbus-tokio = "0.7.3"

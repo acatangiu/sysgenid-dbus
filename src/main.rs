@@ -3,6 +3,7 @@ use dbus::blocking::Connection;
 use dbus::channel::Sender;
 use dbus::Message;
 use dbus_crossroads::{Context, Crossroads, MethodErr};
+use log::debug;
 use std::cmp::max;
 use std::collections::HashMap;
 use std::error::Error;
@@ -37,12 +38,18 @@ impl Sysgenid {
     {
         // Update generation counter.
         self.generation_counter = max(min_gen, self.generation_counter + 1);
+        debug!("generation bumped to {}", self.generation_counter);
         // TODO: update mapped value here
         // Signal watchers new generation event.
         signal_fn("NewGeneration", self.generation_counter);
         // Mark all tracked watchers as outdated.
         self.outdated_watchers
             .extend(std::mem::take(&mut self.watchers));
+        debug!(
+            "watchers count {} ; outdated count {}",
+            self.watchers.len(),
+            self.outdated_watchers.len()
+        );
     }
 
     pub fn ack_watcher_gen_counter<F>(
@@ -54,11 +61,21 @@ impl Sysgenid {
     where
         F: FnOnce(&str),
     {
+        debug!("watcher {} ack val {}", watcher_id, watcher_counter);
         if watcher_counter != self.generation_counter {
+            debug!(
+                "invalid counter ack: {} != {}",
+                watcher_counter, self.generation_counter
+            );
             Err(MethodErr::invalid_arg("watcher_counter"))
         } else {
             self.watchers.insert(watcher_id.to_owned(), Watcher {});
             self.remove_outdated_watcher(watcher_id, signal_fn);
+            debug!(
+                "watchers count {} ; outdated count {}",
+                self.watchers.len(),
+                self.outdated_watchers.len()
+            );
             Ok(())
         }
     }
@@ -67,18 +84,25 @@ impl Sysgenid {
     where
         F: FnOnce(&str),
     {
+        debug!("remove watcher {}", watcher_id);
         // Remove watcher from both tracking lists.
         self.watchers.remove(watcher_id);
         self.remove_outdated_watcher(watcher_id, signal_fn);
+        debug!(
+            "watchers count {} ; outdated count {}",
+            self.watchers.len(),
+            self.outdated_watchers.len()
+        );
     }
 
     fn remove_outdated_watcher<F>(&mut self, watcher_id: &str, signal_fn: F)
     where
         F: FnOnce(&str),
     {
+        debug!("remove outdated watcher {}", watcher_id);
         if self.outdated_watchers.remove(watcher_id).is_some() && self.outdated_watchers.is_empty()
         {
-            // Just removed the last outdated watcher; system is ready.
+            debug!("just removed the last outdated watcher; system is ready");
             signal_fn("SystemReady");
         }
     }
@@ -139,8 +163,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             move |h: OrgFreedesktopDBusNameOwnerChanged, c: &Connection, _: &Message| {
                 // When there's someone leaving the bus,
                 if h.arg0.eq(&h.arg1) {
+                    debug!("client {} leaving the bus", h.arg0);
                     let mut sysgenid = s2.lock().unwrap();
                     sysgenid.remove_watcher(&h.arg0, |name| {
+                        debug!("send signal: {}", name);
                         let mut signal_msg = dbus::Message::signal(
                             &SYGENID_PATH.into(),
                             &SYGENID_INTERFACE.into(),
@@ -170,6 +196,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             (),
             ("sysgen_counter",),
             |_: &mut Context, data: &mut LSysgenid, ()| {
+                debug!("handle method GetSysGenCounter");
                 let sysgenid = data.lock().unwrap();
                 Ok((sysgenid.generation_counter,))
             },
@@ -179,6 +206,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             (),
             ("outdated_watchers",),
             |_: &mut Context, data: &mut LSysgenid, ()| {
+                debug!("handle method CountOutdatedWatchers");
                 let sysgenid = data.lock().unwrap();
                 let ret = sysgenid.outdated_watchers.len() as u32;
                 Ok((ret,))
@@ -189,6 +217,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             ("watcher_counter",),
             ("sysgen_counter",),
             |ctx: &mut Context, data: &mut LSysgenid, (watcher_counter,): (u32,)| {
+                debug!("handle method AckWatcherCounter");
                 let watcher_id = ctx
                     .message()
                     .sender()
@@ -196,6 +225,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     .to_string();
                 let mut sysgenid = data.lock().unwrap();
                 sysgenid.ack_watcher_gen_counter(&watcher_id, watcher_counter, |name| {
+                    debug!("send signal: {}", name);
                     let signal_msg = ctx.make_signal(name, ());
                     ctx.push_msg(signal_msg);
                 })?;
@@ -207,8 +237,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             ("min_gen",),
             (),
             |ctx: &mut Context, data: &mut LSysgenid, (min_gen,): (u32,)| {
+                debug!("handle method TriggerSysGenUpdate");
                 let mut sysgenid = data.lock().unwrap();
                 sysgenid.bump_generation(min_gen, |name, counter| {
+                    debug!("send signal: {}", name);
                     let signal_msg = ctx.make_signal(name, (counter,));
                     ctx.push_msg(signal_msg);
                 });
@@ -220,6 +252,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Let's add the /com/RFC/sysgenid path, which implements the com.RFC.sysgenid interface.
     cr.insert(SYGENID_PATH, &[iface_token], sysgenid);
 
+    debug!("SysGenID DBus service started");
     // Serve clients forever.
     cr.serve(&c)?;
     unreachable!()
